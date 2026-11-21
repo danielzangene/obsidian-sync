@@ -1,6 +1,6 @@
 {
   "name": "gdrive-sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Sync an Obsidian vault with Google Drive using one command.",
   "main": "main.js",
