@@ -1,279 +1,242 @@
 # PRD — Obsidian Google Drive Sync Plugin
 
-> Source of truth: the Google Doc "PRD - Obsidian Google Drive Sync Plugin.md" (Final v1.1).
-> This is a copy kept next to the code for reference. If the two disagree, the Google Doc wins.
-
 | | |
 |---|---|
-| **Status** | **Final v1.1** (reviewed) |
+| **Status** | v1.2 — engineering review of v1.1 (changes in §11) |
 | **Date** | 2026-11-21 |
 | **Plugin ID** | `gdrive-sync` (working name) |
 | **Platforms** | Obsidian desktop + mobile |
+
+This file replaces the Google Doc "PRD - Obsidian Google Drive Sync Plugin.md" (v1.1). How and when it gets built is in [PLAN.md](../PLAN.md).
 
 ---
 
 ## 1. Summary
 
-An Obsidian plugin that syncs the current vault with Google Drive using a Google account **refresh token**. It has exactly **one command: `Sync`**. Each run:
-
-1. Makes sure the remote folder `obsidian/<vault name>` exists (and creates it on the first connection).
-2. **Uploads** every local file changed since the last successful sync.
-3. **Downloads** every remote file changed since the last successful sync.
-4. **Saves the new "last sync" time — on every successful sync, and only then.**
-
-On the very first run, "last sync" is **2000-01-01T00:00:00Z**, so everything is uploaded and downloaded once.
+An Obsidian plugin with one command, **Sync**, that syncs the current vault with `My Drive/obsidian/<vault name>/` using a Google OAuth refresh token. Each run uploads local changes, downloads remote changes, keeps both versions when a file changed on both sides, and moves the stored "last sync" time forward only when the whole run succeeds.
 
 ## 2. Problem
 
-People who use Obsidian on several devices need their notes in sync. Obsidian Sync costs money, and most third-party options need a desktop client or a complicated setup. Many users already have Google Drive. They want a simple, manual, one-button sync that keeps their notes as plain files in their own Drive.
+People who use Obsidian on several devices need their notes in sync. Obsidian Sync is paid, and most alternatives need a desktop client or a complicated setup. Many users already have Google Drive and want a manual, one-button sync that keeps their notes as plain files in their own Drive.
 
-## 3. Goals
+## 3. Goals and non-goals
 
-- **G1:** One command (`Sync`). No background magic, no extra commands.
-- **G2:** Authentication with a Google OAuth **refresh token** (no browser sign-in inside Obsidian).
-- **G3:** Remote layout is always `My Drive/obsidian/<vault name>/…`, mirroring the vault's folder tree.
-- **G4:** Incremental sync based on a stored "last sync" time. The first run uses `2000-01-01T00:00:00Z`.
-- **G5:** **No silent data loss, ever.** If a file changed on both sides, both versions are kept. If a run fails, the next run redoes the work.
-- **G6:** Works on desktop and mobile.
+**Goals**
 
-## 4. Non-goals (v1)
+- **G1 — One command.** `Sync` is the only command. Nothing runs in the background.
+- **G2 — Refresh-token auth.** The user pastes Client ID, Client Secret and Refresh Token once. No browser sign-in inside Obsidian.
+- **G3 — Plain mirror.** Remote layout is `My Drive/obsidian/<vault name>/…`, mirroring the vault's folders. The plugin creates the folders on first use.
+- **G4 — Incremental.** Only changes since the last successful sync are transferred. The first sync transfers everything.
+- **G5 — No silent data loss.** A file changed on both sides keeps both versions. A failed run is finished by simply running Sync again.
+- **G6 — Desktop and mobile.**
+- **G7 — Visible.** Every run reports what it uploaded, downloaded, skipped, conflicted and failed.
 
-- Automatic or scheduled sync (on save, on startup, on a timer).
-- Syncing deletions or renames (see §12).
-- Syncing the `.obsidian/` config folder.
+**Non-goals (v1)**
+
+- Automatic or scheduled sync.
+- Syncing deletions or renames (§10).
+- Syncing the Obsidian config folder.
 - Merging text inside a file.
-- Google Docs/Sheets native files (they are skipped).
+- Google Docs/Sheets/other Google-native files (skipped).
 - Shared Drives.
 
-## 5. Users and stories
+## 4. Sync model
 
-- **US1:** As a user, I paste my Client ID, Client Secret and Refresh Token into the settings once and can sync from then on.
-- **US2:** As a user, I run **Sync** on a new vault and the plugin creates `obsidian/<vault name>` in my Drive for me.
-- **US3:** As a user, I edit notes on my laptop, run **Sync**, then run **Sync** on my phone and get the changes.
-- **US4:** As a user, I see what happened: files uploaded, downloaded, conflicts, errors.
-- **US5:** As a user, if I edited the same note on two devices, I get both versions and nothing is lost.
-- **US6:** As a user, if sync fails halfway (bad network), I just run **Sync** again and it finishes the job.
+### 4.1 Stored state
 
-## 6. The "last sync" time (core rule)
-
-### 6.1 What is stored
-
-The device compares two different clocks, so it stores **two** watermarks taken at the same moment:
-
-| Field | Clock | Used for |
-|---|---|---|
-| `lastSync.local` | This device's clock | Comparing with local file `mtime` (upload side) |
-| `lastSync.remote` | Google's server clock | Comparing with Drive `modifiedTime` (download side) |
-
-Both default to **`2000-01-01T00:00:00.000Z`**.
-
-Why two: a phone whose clock is 5 minutes off would otherwise miss or repeat changes. Local files are compared with the local clock, and Drive files with Google's clock, so clock drift between devices doesn't matter.
-
-### 6.2 When it changes
-
-- At the **start** of each run, the plugin records `syncStart.local = Date.now()` and `syncStart.remote` = the `Date` header of the first Google API response in the run.
-- **If the run succeeds** (every file processed, zero failures): `lastSync = syncStart` and plugin data is saved. **This happens on every successful sync.**
-- **If anything fails** (auth error, network error, any single file still failing after retries, Obsidian closed mid-run): `lastSync` is **not changed**. The next run starts from the same point and redoes the work. This is safe because every step is idempotent (§7.5).
-
-### 6.3 Why the *start* time and not the end time
-
-If a note is edited *while* a sync is running (on this device or another one), its change time is after `syncStart`. The next sync picks it up. Using the end time would skip that edit forever.
-
-## 7. Functional requirements
-
-### 7.1 Settings tab
-
-| Setting | Type | Notes |
-|---|---|---|
-| Client ID | text | Google OAuth client ID |
-| Client Secret | password field | Google OAuth client secret |
-| Refresh Token | password field | Long-lived refresh token |
-| Last successful sync | read-only text | Shows `lastSync.local` in the user's local time, or "Never" |
-
-The settings tab shows a short warning that the refresh token is stored in plain text on this device (§10).
-
-### 7.2 The `Sync` command
-
-- **Command ID:** `sync`, **name:** `Sync`. Also triggered by a ribbon icon (same action, not a second command).
-- Only one sync at a time. A second **Sync** while one is running shows "Sync already running" and does nothing.
-- While running, the status bar shows `Syncing… ↑3/10 ↓1/4`.
-
-**Step 0 — Check**
-- If Client ID, Client Secret or Refresh Token is empty → notice, stop.
-
-**Step 1 — Get an access token**
-- `POST https://oauth2.googleapis.com/token` with `grant_type=refresh_token`, `client_id`, `client_secret`, `refresh_token`.
-- Keep the access token in memory only. Get a new one if a call returns `401`.
-- On `invalid_grant` → notice "Refresh token is invalid or revoked", stop.
-- Record `syncStart.local` and `syncStart.remote` (§6.2).
-
-**Step 2 — Resolve or create the remote folders (first connection)**
-- Find a folder named `obsidian` in My Drive root (`'root' in parents`, folder mime type, not trashed). Match **case-insensitively**, so an existing `Obsidian` folder is reused. If none exists, create `obsidian`.
-- Inside it, find a folder named exactly the vault name (`app.vault.getName()`). If none exists, create it.
-- If more than one match exists (for example two devices created it at the same time), use the **oldest** (`createdTime`) and show a warning.
-- Cache both folder IDs in plugin data. If a cached ID is missing or trashed, search again.
-
-**Step 3 — Build the remote index**
-- **First sync** (`lastSync.remote` = 2000-01-01): list the whole vault folder tree recursively and cache a **folder map** (`folderId → relative path`) in plugin data.
-- **Later syncs**: run **one** query instead of walking the tree:
-  `modifiedTime > '<lastSync.remote>' and trashed = false`
-  then keep only items whose parent is in the folder map. New folders show up in this query too and are added to the map. If a result's parent is unknown, fall back to a full recursive listing.
-- Request fields: `id, name, mimeType, parents, modifiedTime, md5Checksum, size`.
-- Result: `remoteChanged` = remote files changed since `lastSync.remote`, each with its relative path.
-
-**Step 4 — Upload local changes**
-- Go through every vault file (`app.vault.getFiles()`), skipping excluded paths (§7.4).
-- A file is a candidate when `file.stat.mtime > lastSync.local`.
-- For each candidate, in this order:
-  1. Find the remote file at the same path (create missing remote subfolders).
-  2. **No remote file** → create it.
-  3. **Same content** (MD5 of local bytes = remote `md5Checksum`) → skip. *This check must come before the conflict check, otherwise a retried sync reports false conflicts.*
-  4. **Remote file is also in `remoteChanged`** → **conflict** (§7.3).
-  5. **Otherwise** → update the remote file's content.
-- **Do not set the remote `modifiedTime` yourself.** Let Google stamp it with server time. (Setting it to the local `mtime` would back-date the file, and other devices whose `lastSync.remote` is already later would never download it.)
-- Files over 5 MB use resumable upload, smaller ones multipart upload.
-- Add each uploaded file ID to `uploadedThisRun`.
-
-**Step 5 — Download remote changes**
-- For each file in `remoteChanged` that is **not** in `uploadedThisRun` and not a Google-native type (`application/vnd.google-apps.*`):
-  1. Local file missing → create it (and missing local folders).
-  2. Local MD5 = remote `md5Checksum` → skip.
-  3. Otherwise → overwrite the local file with `app.vault.modifyBinary`.
-- Downloaded files get a new local `mtime`, so the next sync sees them as candidates in Step 4. Step 4.3 (same MD5) skips them. No extra state is needed.
-
-**Step 6 — Finish**
-- Each failed file is retried up to 3 times with exponential backoff.
-- **All files OK** → `lastSync = syncStart`, save plugin data, notice `Sync done — ↑4 ↓2 ⚠1 conflict`.
-- **Any file failed** → keep the old `lastSync`, notice `Sync incomplete — 2 files failed, run Sync again`, and list the failed paths in the log (§7.6).
-
-### 7.3 Conflicts
-
-A conflict is a file changed locally **and** remotely since the last sync, with different content.
-
-- Download the remote version to `<name> (conflict YYYY-MM-DD HHmm).<ext>` in the same folder.
-- Upload the local version as the main file.
-- Count it in the summary notice. The user merges by hand.
-- The conflict copy is a normal file and gets uploaded on the next sync, so every device sees it.
-
-### 7.4 Excluded paths
-
-Never uploaded or downloaded:
-
-- `.obsidian/` (config, plugins, and this plugin's `data.json` with the refresh token)
-- `.trash/`, `.git/`
-- `.DS_Store`, `Thumbs.db`
-- Any remote item whose name contains `/` or `\` or isn't a valid local file name (skipped and logged)
-
-### 7.5 Idempotency (why retrying is always safe)
-
-Running **Sync** twice in a row, or re-running after a failure, must never duplicate or lose data:
-
-- Uploads look up the existing remote file first, so they update instead of creating duplicates.
-- The MD5 check skips files that are already the same on both sides.
-- `lastSync` moves forward only after a fully successful run.
-
-### 7.6 Log
-
-- The last 500 lines of sync activity are kept in `.obsidian/plugins/gdrive-sync/sync.log` (never synced).
-- One line per action: time, `UPLOAD` / `DOWNLOAD` / `SKIP` / `CONFLICT` / `ERROR`, path, reason.
-- No tokens and no file contents in the log.
-
-### 7.7 Stored state (`data.json` via `loadData` / `saveData`)
+Per device, in the plugin's `data.json` (`loadData` / `saveData`). It lives inside the config folder, so it is never synced.
 
 ```json
 {
   "clientId": "",
   "clientSecret": "",
   "refreshToken": "",
-  "lastSync": {
-    "local": "2000-01-01T00:00:00.000Z",
-    "remote": "2000-01-01T00:00:00.000Z"
-  },
-  "rootFolderId": null,
+  "lastSync": "2000-01-01T00:00:00.000Z",
   "vaultFolderId": null,
-  "folderMap": {}
+  "folders": {},
+  "files": {}
 }
 ```
 
-- Missing fields fall back to these defaults, so the first sync is always a full sync.
-- The file is per device (inside `.obsidian/`) and never synced, so each device keeps its own `lastSync`.
+| Field | Meaning |
+|---|---|
+| `lastSync` | **Google server time** at the start of the last fully successful run. Default `2000-01-01T00:00:00.000Z` = never synced. |
+| `vaultFolderId` | Drive ID of `obsidian/<vault name>`. |
+| `folders` | `relative folder path → Drive folder ID` for every synced subfolder. |
+| `files` | The **index**: `relative path → { id, md5, mtime, size }` for every file as it was the last time this device synced it. `md5` is the **base** version for conflict detection; `mtime`/`size` are the local stat recorded at that moment. |
 
-## 8. Technical notes
+Missing fields fall back to these defaults. Any cached Drive ID that turns out to be missing or trashed is dropped and looked up again by path (created if needed).
 
-- **HTTP:** Use Obsidian's `requestUrl()` (not `fetch`) to avoid CORS problems on desktop and mobile. Read the `Date` response header for `syncStart.remote`.
-- **API:** Google Drive API v3 (`/drive/v3`, `/upload/drive/v3`).
-- **OAuth scope:** `https://www.googleapis.com/auth/drive`. The narrower `drive.file` scope only sees files the app created, so it can't find an `obsidian` folder the user created.
-- **Times:** All comparisons in UTC milliseconds. Drive query times in RFC 3339.
-- **File I/O:** `app.vault.readBinary` / `createBinary` / `modifyBinary`, `app.vault.createFolder`.
-- **Hashing:** MD5 in pure JS (for example `spark-md5`), since Web Crypto has no MD5. Hash only candidate files, not the whole vault.
-- **Rate limits:** On `403 rateLimitExceeded` / `429` / `5xx`, exponential backoff with jitter. At most 4 transfers at once.
+### 4.2 Change detection
+
+- **Local:** a file is *touched* if it has no index entry, or its current `mtime` or `size` differs from the entry. Only touched files are hashed. No clock comparison is involved, so a wrong or corrected device clock doesn't matter.
+- **Remote:** files whose Drive `modifiedTime` is after `lastSync` minus a **5-minute overlap**. Both values come from Google's clock. The overlap covers Drive search results that lag slightly behind writes; files seen twice are no-ops because of the index.
+
+### 4.3 Decision rule
+
+For one path, with **L** = MD5 of the local file, **R** = Drive `md5Checksum`, **B** = base MD5 from the index:
+
+| # | Situation | Action | New base |
+|---|---|---|---|
+| D1 | Only local exists | Upload (create) | L |
+| D2 | Only remote exists | Download (create) | R |
+| D3 | L = R | Nothing | L |
+| D4 | L = B (only remote changed) | Download (overwrite) | R |
+| D5 | R = B (only local changed) | Upload (update) | L |
+| D6 | Anything else (both changed, or no base) | Conflict (§5.3) | L |
+
+Rows are checked in order. D3 before D6 means a retried run never reports false conflicts.
+
+### 4.4 `lastSync` rule
+
+- At the start of each run, `syncStart` = the `Date` header of the first Google response in the run. If it can't be read, the run fails.
+- **Run succeeds** (every file processed, zero failures) → `lastSync = syncStart`. This happens on every successful run, including runs that transferred nothing.
+- **Anything fails** (auth, network, any file still failing after retries, Obsidian closed mid-run) → `lastSync` is unchanged and the next run redoes the work.
+- The **start** time is used, not the end time, so a remote change made during a run is picked up by the next one.
+- `folders` and `files` are saved at the end of **every** run, successful or not, because they describe what was actually transferred. That is what makes re-running safe.
+
+### 4.5 Guarantees
+
+- Running Sync twice in a row, or again after a failure, never creates duplicates or false conflicts and never loses data.
+- A local file is only overwritten when it still matches its base (D4). Anything else becomes a conflict.
+- The plugin never sets a remote `modifiedTime`. Google stamps server time, so other devices can't miss a change because it was back-dated.
+
+## 5. Functional requirements
+
+### 5.1 Settings tab
+
+| Setting | Type | Notes |
+|---|---|---|
+| Client ID | text | |
+| Client Secret | password field | |
+| Refresh Token | password field | |
+| Last successful sync | read-only | `lastSync` in the user's local time, or "Never" |
+
+A short warning says the refresh token is stored in plain text on this device (§7).
+
+### 5.2 The `Sync` command
+
+Command ID `sync`, name `Sync`. A ribbon icon runs the same command. Only one run at a time; pressing Sync during a run shows "Sync already running" and does nothing.
+
+1. **Check.** If Client ID, Client Secret or Refresh Token is empty → notice, stop.
+2. **Token and start time.** `POST https://oauth2.googleapis.com/token` with `grant_type=refresh_token`. Keep the access token in memory only. On `invalid_grant` → notice "Refresh token is invalid or revoked", stop. Record `syncStart` (§4.4).
+3. **Vault folder.** Use `vaultFolderId` if it is still valid. Otherwise find the folder named `obsidian` in My Drive root (**case-insensitive**, so an existing `Obsidian` is reused) and, inside it, the folder named exactly the vault name. Create either one if missing. If several match, use the oldest (`createdTime`) and show a warning. **If the vault folder ID differs from the cached one, reset `lastSync`, `folders` and `files` to defaults** so the run is a full sync.
+4. **Remote changes.**
+   - If `lastSync` is the default: list the vault folder tree recursively.
+   - Otherwise: run one query, `modifiedTime > '<lastSync − 5 min>' and trashed = false`, across My Drive. Resolve each result's path through `folders`: add result folders whose parent is known, repeat until nothing new resolves, then ignore every item whose parent is still unknown (it is outside the vault).
+   - If two remote files map to the same path, use the oldest and show a warning.
+   - Result: `remoteChanged` = `path → { id, md5Checksum, modifiedTime }`.
+5. **Upload pass.** For each touched local file (§4.2) that isn't excluded (§5.4):
+   - L = B (content unchanged) → just update the index stat. The file may still be downloaded in step 6.
+   - Otherwise get R: from `remoteChanged`; else from the index (remote unchanged, so R = B); else look up the path on Drive to avoid creating a duplicate.
+   - Apply §4.3 (D1, D3, D5, D6). Create missing remote folders; each folder is created only once per run, even with parallel uploads.
+6. **Download pass.** For each file in `remoteChanged` that wasn't handled in step 5:
+   - Skip Google-native types, excluded paths and invalid names (§5.4).
+   - R = B → nothing to do.
+   - Otherwise apply §4.3 (D2, D3, D4, D6). Right before overwriting, re-check that the local file still matches its base. If it was edited in the meantime, it is a conflict.
+7. **Finish.** Save `folders` and `files`. If no file failed, set `lastSync = syncStart` and save. Show the summary notice (§5.6).
+
+### 5.3 Conflicts
+
+1. Save the remote version next to the file as `<name> (conflict YYYY-MM-DD HHmm).<ext>`, using the remote `modifiedTime` in local time. The name depends only on the remote version, so a retried run reuses the same copy. If a different file already has that name, add ` 2`, ` 3`, ….
+2. Upload the local version as the main file.
+3. Count it in the summary. The user merges by hand. The conflict copy is a normal file and is uploaded on the next sync, so every device sees it.
+
+### 5.4 What is synced
+
+Everything in the vault except:
+
+- any path with a file or folder name starting with `.` (covers the config folder, `.trash/`, `.git/`, `.DS_Store`);
+- `Thumbs.db`;
+- Google-native files (`application/vnd.google-apps.*`);
+- remote items whose names Obsidian can't use (containing any of `* " \ / < > : | ?`).
+
+Skipped items are logged and **do not count as failures**.
+
+### 5.5 Errors and retries
+
+- Network errors, `429`, `403 rateLimitExceeded`/`userRateLimitExceeded` and `5xx` are retried up to 3 times with exponential backoff and jitter.
+- `401` → get a new access token once and retry.
+- A file that still fails is recorded as failed; the run continues with the other files and ends "incomplete".
+- At most 4 transfers run at once.
+
+### 5.6 Feedback
+
+- **Status bar** during a run: `Syncing… ↑3/10 ↓1/4`.
+- **Notices:** `Sync done — ↑4 ↓2 ⚠1 conflict`, `Sync incomplete — 2 files failed, run Sync again`, plus the stop/warning messages above.
+- **Log:** the last 500 lines in `sync.log` inside the plugin's folder (never synced). One line per action: time, `UPLOAD` / `DOWNLOAD` / `SKIP` / `CONFLICT` / `ERROR`, path, reason. Never tokens or file contents.
+
+## 6. Technical constraints
+
+- **HTTP:** Obsidian `requestUrl()`, not `fetch`, to avoid CORS on desktop and mobile.
+- **API:** Google Drive API v3. Multipart upload up to 5 MB, resumable above.
+- **Scope:** `https://www.googleapis.com/auth/drive`. `drive.file` can't see an `obsidian` folder the user created.
+- **Times:** compared as UTC milliseconds; RFC 3339 in Drive queries.
+- **File I/O:** `app.vault` binary APIs (`readBinary`, `createBinary`, `modifyBinary`, `createFolder`).
+- **Hashing:** MD5 in pure JS (e.g. `spark-md5`); Web Crypto has no MD5.
 - **Manifest:** `isDesktopOnly: false`.
 
-## 9. Getting a refresh token (for the README)
+## 7. Security
 
-1. In Google Cloud Console, create a project and turn on the **Google Drive API**.
-2. Set up the OAuth consent screen and add your Google account as a test user.
-3. Create an **OAuth client ID** (type "Desktop app"). Copy the Client ID and Client Secret.
-4. Get a refresh token with scope `https://www.googleapis.com/auth/drive`, for example in the OAuth 2.0 Playground (gear icon → "Use your own OAuth credentials").
+- The refresh token gives full Drive access and is stored in plain text in `data.json`. The settings tab says so.
+- `data.json` lives in the config folder, which is never synced, so the token never reaches Drive.
+- Tokens and file contents never go to the console or the log.
+
+## 8. Getting a refresh token (for the README)
+
+1. In Google Cloud Console, create a project and enable the **Google Drive API**.
+2. Configure the OAuth consent screen and add your account as a test user.
+3. Create an **OAuth client ID** of type **Web application** with the authorized redirect URI `https://developers.google.com/oauthplayground`. Copy the Client ID and Client Secret.
+4. In the OAuth 2.0 Playground, open the gear icon, tick "Use your own OAuth credentials", enter them, authorize scope `https://www.googleapis.com/auth/drive`, and exchange the code for a refresh token.
 5. Paste the three values into the plugin settings.
 
-Note: while the consent screen is in "Testing" mode, Google expires refresh tokens after 7 days. Move the app to "In production" for a long-lived token.
+While the consent screen is in "Testing", Google expires refresh tokens after 7 days. Set it to "In production" for a long-lived token; Google then shows an "unverified app" warning during step 4, which is expected for a personal client.
 
-## 10. Security
-
-- The refresh token gives full Drive access and is stored in plain text in `data.json` on each device. The settings tab says so.
-- `.obsidian/` is always excluded, so the token never goes to Drive.
-- Tokens and file contents are never written to the console or the log.
-
-## 11. Acceptance tests
+## 9. Acceptance tests
 
 | # | Scenario | Expected |
 |---|---|---|
 | A1 | First sync, no `obsidian/` folder | `obsidian/<vault>` created; all files uploaded; `lastSync` set |
 | A2 | First sync, `Obsidian/` already exists | Existing folder reused; no duplicate |
-| A3 | Second sync, no changes | 0 up, 0 down; **`lastSync` updated to this run's start time** |
-| A4 | Edit one note, sync | Exactly 1 upload; `lastSync` updated |
-| A5 | Edit on device B, sync B, then sync A | A downloads exactly that file |
-| A6 | Device B edits offline Monday, A syncs Tuesday, B syncs Wednesday, A syncs Thursday | A gets B's edit (proves remote time isn't back-dated) |
-| A7 | New nested `a/b/c.md` | Remote `a/b/` created, file uploaded |
-| A8 | Same note edited on both devices | Both versions kept (`(conflict …)` copy); nothing lost |
-| A9 | Network drops mid-sync | "Sync incomplete"; **`lastSync` unchanged**; next sync finishes with no duplicates and no false conflicts |
-| A10 | Note edited *during* a sync | Picked up by the next sync |
-| A11 | Device clock 10 minutes wrong | A5 and A6 still pass |
-| A12 | Downloaded file, next sync | Not uploaded again (MD5 skip) |
+| A3 | Second sync, no changes | 0 up, 0 down; `lastSync` = this run's start |
+| A4 | Edit one note, sync | Exactly 1 upload |
+| A5 | Edit on B, sync B, then sync A | A downloads exactly that file |
+| A6 | B edits offline Monday, A syncs Tuesday, B syncs Wednesday, A syncs Thursday | A gets B's edit (no back-dating) |
+| A7 | New `a/b/c.md` and `a/b/d.md` in one run | Remote `a/` and `a/b/` created once each; both uploaded |
+| A8 | Same note edited on both devices | Conflict copy created; both versions kept |
+| A9 | Network drops mid-sync | "Sync incomplete"; `lastSync` unchanged; next sync finishes with no duplicates and no conflicts |
+| A10 | Note edited during a sync, both during the upload pass and right before its download | Edit kept (conflict copy if needed) and uploaded next sync |
+| A11 | Device clock 10 minutes wrong, and clock corrected between syncs | A4, A5, A6 still pass |
+| A12 | A downloads B's edit; B edits the same note again; A syncs | A downloads it; no upload, no conflict |
 | A13 | Revoked refresh token | Clear notice; nothing changed; `lastSync` unchanged |
-| A14 | **Sync** pressed twice quickly | Second run refused |
-| A15 | Mobile (iOS/Android) | A1–A14 pass |
-| P1 | 2,000 notes, nothing changed | Sync finishes in under 10 s on desktop |
+| A14 | Sync pressed twice quickly | Second run refused |
+| A15 | Vault folder trashed in Drive, then Sync | Folder recreated; whole vault uploaded |
+| A16 | Remote Google Doc and a remote file named `a:b.md` | Both skipped and logged; run reports "done" |
+| P1 | 2,000 notes, nothing changed | Finishes in under 10 s on desktop |
+| P2 | iOS and Android | A1–A16 pass |
 
-## 12. Known limitations and decisions
+## 10. Known limitations
 
-1. **Deletions don't sync.** A note deleted on one device comes back from the other side. *v2:* keep a file index and move deleted files to Drive trash.
-2. **Renames/moves** look like a new file; the old path stays elsewhere. Same v2 fix.
-3. **Upload runs before download** (as requested). The conflict rule in §7.3 makes sure this never overwrites a remote change without keeping a copy.
-4. **Conflict policy** is always "keep both" in v1. A setting (local wins / remote wins) can come later.
-5. **Case-only renames** (`Note.md` → `note.md`) can clash on Windows/macOS. Logged, not handled in v1.
-6. **v2 candidate:** switch the remote side to the Drive Changes API (`changes.list` with a saved page token). It's the most reliable way to track remote changes and would also enable deletion sync.
+1. **Deletions don't sync.** A note deleted on one device stays on Drive and on other devices, and comes back on a device that deleted it if the Drive copy changes.
+2. **Renames and moves** look like a new file; the old path stays.
+3. **Conflicts always keep both.** A "local wins / remote wins" setting can come later.
+4. **Case-only name differences** (`Note.md` vs `note.md`) can clash on case-insensitive file systems. Logged, not resolved.
+5. **Obsidian closed mid-sync:** the index for that run isn't saved, so the next run may create an unnecessary conflict copy. No data is lost.
+6. **Local detection uses `mtime` + `size`.** A tool that changes content but keeps both unchanged isn't detected.
+7. **v2:** switch the remote side to the Drive Changes API (`changes.list` with a saved page token). It enables deletion and rename sync and removes the need for the 5-minute overlap.
 
-## 13. Milestones
+## 11. Changelog v1.1 → v1.2
 
-| Milestone | Scope |
-|---|---|
-| M1 | Skeleton, settings tab, token refresh, folder resolve/create, `syncStart` capture |
-| M2 | Remote index (full + incremental) and folder map |
-| M3 | Upload pass (MD5-first, conflicts, no back-dating) |
-| M4 | Download pass, finish step, `lastSync` rule, retries, log, status bar |
-| M5 | Acceptance tests A1–A15 + P1, README, release |
-
-## 14. Review changelog (v1.0 → v1.1)
-
-| # | Finding | Severity | Fix |
+| # | Finding in v1.1 | Severity | Change |
 |---|---|---|---|
-| R1 | Setting remote `modifiedTime` to the local `mtime` back-dates files, so other devices can miss them forever | **Critical (data loss)** | Never set `modifiedTime`; Google stamps server time (§7.2 Step 4, test A6) |
-| R2 | One `lastSync` compared across two clocks breaks on devices with a wrong clock | High | Two watermarks: local and server time (§6.1, test A11) |
-| R3 | Conflict check ran before the MD5 check, so a retried sync reported false conflicts | High | MD5 check first (§7.2 Step 4.3, test A9) |
-| R4 | `lastSync` update rule was spread across sections and unclear | Medium | Own section: updated on every successful sync, to the start time, never on failure (§6) |
-| R5 | Walking the whole Drive folder tree on every sync is slow for large vaults | Medium | Folder map + one incremental query (§7.2 Step 3, test P1) |
-| R6 | Two devices can create duplicate folders at the same moment | Medium | Use the oldest, warn (§7.2 Step 2) |
-| R7 | Setting the local `mtime` on download isn't reliable on mobile | Low | Dropped; the MD5 check handles it (§7.2 Step 5) |
-| R8 | No way to see what a sync did | Low | Sync log + status bar (§7.6) |
+| C1 | If a conflicted file's upload failed, step 5 downloaded the remote version over the local edit; the conflict copy also held the remote version, so the local edit was lost. Step 5 also overwrote notes edited during the run. | **Critical (data loss)** | Download only overwrites a file that still matches its base (D4); otherwise conflict. Files handled in the upload pass are skipped (§5.2 steps 5–6, A10). |
+| C2 | Conflicts were "local changed since lastSync and remote changed since lastSync". A file downloaded in one run had a new `mtime`, so if the other device edited it again it was reported as a conflict on every sync. | High | Per-file index with a base MD5; three-way decision rule (§4.3, A12). |
+| C3 | The incremental query covers all of My Drive, so almost every result has a parent outside the folder map. The "unknown parent → full listing" fallback would run on nearly every sync. | High | Resolve new folders until stable, then ignore unknown parents (§5.2 step 4). |
+| C4 | If the vault folder was trashed and recreated, incremental sync never re-uploaded files that hadn't changed. | High | Reset state when the vault folder ID changes; drop stale cached IDs everywhere (§4.1, §5.2 step 3, A15). |
+| C5 | `lastSync.local` broke when a device clock was corrected backwards (edits in between were never uploaded). With the index it is redundant. | Medium | Local side compares `mtime`/`size` with the index; one `lastSync` on Google's clock (§4.2, A11). |
+| C6 | Parallel uploads into the same new folder could create duplicate Drive folders. | Medium | Each folder created once per run (A7). |
+| C7 | Refresh-token guide said "Desktop app" client; the OAuth Playground needs its own redirect URI, which only a "Web application" client allows. | Medium | Guide fixed (§8). |
+| C8 | Drive search can lag behind writes; a change made just before `syncStart` could be missed for good. | Medium | 5-minute overlap; re-seen files are no-ops (§4.2). |
+| C9 | Conflict copy named after the current time, so a retried run created a second copy. | Low | Named after the remote `modifiedTime` (§5.3). |
+| C10 | Exclusion list hard-coded `.obsidian/`, which users can rename. | Low | Exclude any name starting with `.` (§5.4). |
+| C11 | Same rules repeated in several sections (lastSync, retries, idempotency); user stories duplicated goals; milestones duplicated the plan; `rootFolderId` unused after setup. | Editorial | Each rule stated once; stories folded into goals (G7 added); milestones moved to PLAN.md; `rootFolderId` removed. |
