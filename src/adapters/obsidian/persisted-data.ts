@@ -1,11 +1,12 @@
 import { EPOCH_ISO } from "../../domain/constants";
 import type { FileIndex } from "../../domain/types";
+import type { CredentialStore, SecretKey } from "../../ports/credential-store";
 import { SCHEMA_VERSION, type PersistedData } from "../../ports/state-store";
 
 export function defaultPersistedData(): PersistedData {
   return {
     schemaVersion: SCHEMA_VERSION,
-    settings: { clientId: "", clientSecretName: "", refreshTokenName: "", remoteFolderName: "" },
+    settings: { clientId: "", remoteFolderName: "" },
     state: {
       lastSyncTime: EPOCH_ISO,
       fileIndex: {},
@@ -69,8 +70,6 @@ export function normalizePersistedData(raw: unknown): PersistedData {
   const settings = isRecord(raw.settings) ? raw.settings : {};
   data.settings = {
     clientId: asString(settings.clientId),
-    clientSecretName: asString(settings.clientSecretName),
-    refreshTokenName: asString(settings.refreshTokenName),
     remoteFolderName: asString(settings.remoteFolderName),
   };
 
@@ -85,4 +84,26 @@ export function normalizePersistedData(raw: unknown): PersistedData {
     },
   };
   return data;
+}
+
+/**
+ * Schema v1 (0.1.0) stored the *names* of user-chosen entries in Obsidian's secret storage.
+ * Schema v2 stores the values under fixed IDs. Copies the old values over once, without
+ * overwriting anything already set.
+ */
+export function migrateLegacySecrets(
+  raw: unknown,
+  readNamedSecret: (name: string) => string | null,
+  store: CredentialStore,
+): void {
+  const settings = isRecord(raw) && isRecord(raw.settings) ? raw.settings : {};
+  const legacyNames: [SecretKey, unknown][] = [
+    ["clientSecret", settings.clientSecretName],
+    ["refreshToken", settings.refreshTokenName],
+  ];
+  for (const [key, name] of legacyNames) {
+    if (typeof name !== "string" || name === "" || store.get(key) !== null) continue;
+    const value = readNamedSecret(name);
+    if (value !== null && value !== "") store.set(key, value);
+  }
 }

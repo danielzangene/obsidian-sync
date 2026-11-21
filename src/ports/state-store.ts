@@ -1,13 +1,10 @@
 import type { FileIndex } from "../domain/types";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
+/** Non-secret settings. The client secret and refresh token live in a `CredentialStore`. */
 export interface Settings {
   clientId: string;
-  /** Name of the client secret in Obsidian's secret storage (not the secret itself). */
-  clientSecretName: string;
-  /** Name of the refresh token in Obsidian's secret storage (not the token itself). */
-  refreshTokenName: string;
   /** Remote folder inside `obsidian/`. Empty = vault name (PRD OQ-3). */
   remoteFolderName: string;
 }

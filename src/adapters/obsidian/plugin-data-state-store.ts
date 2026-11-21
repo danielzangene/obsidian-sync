@@ -11,8 +11,9 @@ export class PluginDataStateStore implements StateStore {
     readonly data: PersistedData,
   ) {}
 
-  static async load(plugin: Plugin): Promise<PluginDataStateStore> {
-    return new PluginDataStateStore(plugin, normalizePersistedData(await plugin.loadData()));
+  /** Builds the store from what `plugin.loadData()` returned. */
+  static fromRaw(plugin: Plugin, raw: unknown): PluginDataStateStore {
+    return new PluginDataStateStore(plugin, normalizePersistedData(raw));
   }
 
   save(): Promise<void> {
