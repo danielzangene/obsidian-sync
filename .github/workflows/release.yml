@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: write
+  # Needed by actions/attest-build-provenance to sign and store the attestations.
+  id-token: write
+  attestations: write
 
 env:
   VERSION: ${{ inputs.version || github.ref_name }}
@@ -37,6 +40,14 @@ jobs:
           fi
       - run: npm run check
       - run: npm run build
+      # Lets users (and the community directory review) verify the release assets
+      # were built from this repository: `gh attestation verify main.js -R <owner>/<repo>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
       # 0.x versions are published as pre-releases so BRAT users can install them.
       # 1.0.0 and later are created as drafts for a human to review and publish.
       - name: Create release
