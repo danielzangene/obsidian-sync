@@ -2,12 +2,12 @@
 
 |                  |                                                                            |
 | ---------------- | -------------------------------------------------------------------------- |
-| **Status**       | Implemented in 0.1.0 (verification on real Drive and devices pending, §10) |
-| **Version**      | 1.1                                                                        |
+| **Status**       | Implemented in 0.2.0 (verification on real Drive and devices pending, §10) |
+| **Version**      | 1.2                                                                        |
 | **Last updated** | 2026-11-21                                                                 |
 | **Authors**      | TBD                                                                        |
 | **Reviewers**    | TBD                                                                        |
-| **Implements**   | [PRD v1.4](PRD.md)                                                         |
+| **Implements**   | [PRD v1.5](PRD.md)                                                         |
 
 This document describes **how** the plugin meets the [PRD](PRD.md). It doesn't restate requirements; it references them by ID (FR-, NFR-, AT-).
 
@@ -42,6 +42,7 @@ Ports-and-adapters (hexagonal) layout. The sync logic has no dependency on Obsid
             │ domain/   decide(), exclusions, conflict name    │  pure, no I/O
             │   ▲                                              │
             │ ports/    LocalFiles · RemoteFiles · StateStore  │  interfaces only
+            │           CredentialStore                        │
             │           Clock · SyncLog · HttpTransport        │
             └───▲──────────────────────────────────────────────┘
                 │ implements
@@ -64,14 +65,15 @@ These rules are enforced by ESLint `no-restricted-imports` per folder (`eslint.c
 
 ### 3.2 Ports
 
-| Port            | Purpose                                                                                                      | Adapter                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `LocalFiles`    | List vault files with stat; fresh stat; read/write bytes (creating folders)                                  | `ObsidianLocalFiles` (Vault API)               |
-| `RemoteFiles`   | Path-based view of the remote folder: `connect`, `listAll`, `listChangedSince`, `find`, `upload`, `download` | `GoogleDriveRemoteFiles`                       |
-| `StateStore`    | The single in-memory copy of persisted data, shared by UI and sync; `save()`                                 | `PluginDataStateStore` (`loadData`/`saveData`) |
-| `Clock`         | `now()`, `sleep()`                                                                                           | `SystemClock`                                  |
-| `SyncLog`       | `record(action, path, reason)`; `flush()`                                                                    | `FileSyncLog`                                  |
-| `HttpTransport` | Send one HTTP request; rejects only on network failure                                                       | `obsidianTransport` (`requestUrl`)             |
+| Port              | Purpose                                                                                                      | Adapter                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `LocalFiles`      | List vault files with stat; fresh stat; read/write bytes (creating folders)                                  | `ObsidianLocalFiles` (Vault API)                                                                                             |
+| `RemoteFiles`     | Path-based view of the remote folder: `connect`, `listAll`, `listChangedSince`, `find`, `upload`, `download` | `GoogleDriveRemoteFiles`                                                                                                     |
+| `StateStore`      | The single in-memory copy of persisted data, shared by UI and sync; `save()`                                 | `PluginDataStateStore` (`loadData`/`saveData`)                                                                               |
+| `Clock`           | `now()`, `sleep()`                                                                                           | `SystemClock`                                                                                                                |
+| `SyncLog`         | `record(action, path, reason)`; `flush()`                                                                    | `FileSyncLog`                                                                                                                |
+| `CredentialStore` | Get/set the client secret and refresh token, outside `data.json`                                             | `SecretStorageCredentialStore` (Obsidian secret storage, fixed IDs `gdrive-sync-client-secret`, `gdrive-sync-refresh-token`) |
+| `HttpTransport`   | Send one HTTP request; rejects only on network failure                                                       | `obsidianTransport` (`requestUrl`)                                                                                           |
 
 `RemoteFiles` is **path-based**. Mapping paths onto Drive's ID/parent graph (folder IDs, folder creation, vault folder resolution) is a Drive detail and stays inside the Google adapter. The app layer only sees paths, opaque remote IDs, MD5s and server timestamps.
 
@@ -83,12 +85,12 @@ File names are kebab-case; one main export per file.
 src/
   main.ts
   domain/   constants.ts  types.ts  errors.ts  decide.ts  exclusions.ts  conflict-name.ts  paths.ts
-  ports/    local-files.ts  remote-files.ts  state-store.ts  clock.ts  sync-log.ts  http-transport.ts
+  ports/    local-files.ts  remote-files.ts  state-store.ts  credential-store.ts  clock.ts  sync-log.ts  http-transport.ts
   lib/      md5.ts  pool.ts  retry.ts
   app/      sync-service.ts  upload-pass.ts  download-pass.ts  conflict-resolver.ts  run-context.ts  sync-report.ts
   adapters/
     google/    google-drive-remote-files.ts  drive-api.ts  oauth-token-provider.ts  http-client.ts  drive-query.ts  drive-errors.ts
-    obsidian/  obsidian-local-files.ts  obsidian-transport.ts  plugin-data-state-store.ts  persisted-data.ts  file-sync-log.ts
+    obsidian/  obsidian-local-files.ts  obsidian-transport.ts  plugin-data-state-store.ts  persisted-data.ts  file-sync-log.ts  secret-storage-credential-store.ts
     system/    system-clock.ts
   ui/       settings-tab.ts  progress-indicator.ts  report-text.ts
 tests/
@@ -100,15 +102,13 @@ tests/
 
 ### 4.1 Persisted state
 
-Stored per device in the plugin's `data.json`, which lives in the config folder and is therefore never synced (FR-5). Secrets are not stored here: the settings hold only the **names** of entries in Obsidian's secret storage (NFR-5).
+Stored per device in the plugin's `data.json`, which lives in the config folder and is therefore never synced (FR-5). The client secret and refresh token are not stored here: the user pastes them into masked fields in settings, and they go to Obsidian's secret storage through `CredentialStore` (NFR-5).
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "settings": {
     "clientId": "",
-    "clientSecretName": "",
-    "refreshTokenName": "",
     "remoteFolderName": ""
   },
   "state": {
@@ -124,13 +124,13 @@ Stored per device in the plugin's `data.json`, which lives in the config folder 
 }
 ```
 
-| Field                | Owner               | Meaning                                                                                                                     |
-| -------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion`      | `persisted-data.ts` | Version of this layout. Migrations go in `normalizePersistedData`.                                                          |
-| `settings.*`         | `ui/`               | Client ID, secret-storage names of the client secret and refresh token, optional remote folder name (FR-1).                 |
-| `state.lastSyncTime` | `app/`              | Watermark. `2000-01-01T00:00:00.000Z` (`EPOCH_ISO`) means never synced.                                                     |
-| `state.fileIndex`    | `app/`              | Sync index: vault-relative path → `remoteId`, base `md5`, and the local `mtimeMs`/`size` recorded when the file was synced. |
-| `state.driveCache`   | Google adapter      | Drive IDs of the vault folder and its subfolders, keyed by vault-relative path.                                             |
+| Field                | Owner               | Meaning                                                                                                                                                                               |
+| -------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion`      | `persisted-data.ts` | Version of this layout (2). `normalizePersistedData` upgrades older layouts; `migrateLegacySecrets` copies v1 secret-storage entries (chosen by name in 0.1.0) to the fixed IDs once. |
+| `settings.*`         | `ui/`               | Client ID and optional remote folder name (FR-1).                                                                                                                                     |
+| `state.lastSyncTime` | `app/`              | Watermark. `2000-01-01T00:00:00.000Z` (`EPOCH_ISO`) means never synced.                                                                                                               |
+| `state.fileIndex`    | `app/`              | Sync index: vault-relative path → `remoteId`, base `md5`, and the local `mtimeMs`/`size` recorded when the file was synced.                                                           |
+| `state.driveCache`   | Google adapter      | Drive IDs of the vault folder and its subfolders, keyed by vault-relative path.                                                                                                       |
 
 Missing or malformed fields fall back to defaults, so a damaged state file leads to a full (safe) sync, not an error.
 
@@ -265,13 +265,13 @@ Requested fields: `id, name, mimeType, parents, createdTime, modifiedTime, md5Ch
 
 ## 7. Cross-cutting concerns
 
-| Concern               | Approach                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Security**          | Client secret and refresh token live in Obsidian's secret storage; `data.json` holds only their names. The `drive` scope grants full Drive access (PRD OQ-5): the token never leaves the device except to Google, is never logged, and the user owns the OAuth client and can revoke it. Network access only to `oauth2.googleapis.com` and `www.googleapis.com`. MD5 is a content checksum (Drive's `md5Checksum`), not a security control. |
-| **Privacy / logging** | `SyncLog.record(action, path, reason)` is the only logging API, so file contents and tokens can't reach the log. Error messages carry only HTTP status and Google's error reason. No console output, no telemetry.                                                                                                                                                                                                                           |
-| **Reliability**       | Idempotent passes (D3 first, stable conflict names, lookup before create, pre-generated IDs), checksum-verified downloads, state checkpoints, watermark advanced only on full success.                                                                                                                                                                                                                                                       |
-| **Performance**       | An unchanged vault costs at most a token request, a vault folder check and one query; zero per-file calls and zero hashing (PT-01). Index size is about 130 B per file (≈ 260 KB for 2,000 files).                                                                                                                                                                                                                                           |
-| **Compatibility**     | Only APIs available on mobile: `requestUrl`, Vault binary APIs, `normalizePath`, secret storage; pure-JS MD5 (`spark-md5`), since Web Crypto has no MD5. `minAppVersion` 1.13.2 (declarative settings with secret controls). `isDesktopOnly: false`.                                                                                                                                                                                         |
+| Concern               | Approach                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Security**          | Client secret and refresh token are pasted into masked fields and kept in Obsidian's secret storage under fixed IDs; `data.json` never holds them. The `drive` scope grants full Drive access (PRD OQ-5): the token never leaves the device except to Google, is never logged, and the user owns the OAuth client and can revoke it. Network access only to `oauth2.googleapis.com` and `www.googleapis.com`. MD5 is a content checksum (Drive's `md5Checksum`), not a security control. |
+| **Privacy / logging** | `SyncLog.record(action, path, reason)` is the only logging API, so file contents and tokens can't reach the log. Error messages carry only HTTP status and Google's error reason. No console output, no telemetry.                                                                                                                                                                                                                                                                       |
+| **Reliability**       | Idempotent passes (D3 first, stable conflict names, lookup before create, pre-generated IDs), checksum-verified downloads, state checkpoints, watermark advanced only on full success.                                                                                                                                                                                                                                                                                                   |
+| **Performance**       | An unchanged vault costs at most a token request, a vault folder check and one query; zero per-file calls and zero hashing (PT-01). Index size is about 130 B per file (≈ 260 KB for 2,000 files).                                                                                                                                                                                                                                                                                       |
+| **Compatibility**     | Only APIs available on mobile: `requestUrl`, Vault binary APIs, `normalizePath`, secret storage; pure-JS MD5 (`spark-md5`), since Web Crypto has no MD5. `minAppVersion` 1.13.2 (declarative settings with secret controls). `isDesktopOnly: false`.                                                                                                                                                                                                                                     |
 
 ## 8. Testing strategy
 
@@ -299,15 +299,16 @@ The safety mechanisms (re-check before overwrite, idempotent creates, folder mem
 | Conflict copy named after the current time                           | Rejected            | Retries created duplicate copies.                                                                                                                                                                                                          |
 | Plain retries of create requests                                     | Rejected            | A create whose response is lost would be applied twice; pre-generated IDs make creates idempotent.                                                                                                                                         |
 | Credentials in `data.json`                                           | Rejected            | Obsidian's secret storage keeps them out of the plugin's data file.                                                                                                                                                                        |
+| Secret-storage picker for credentials (0.1.0)                        | Replaced in 0.2.0   | Users had to create named secrets first; pasting into a masked field is simpler and the values still go to secret storage.                                                                                                                 |
 | Imperative settings tab (works from Obsidian 1.11.4)                 | Rejected            | The declarative API makes settings searchable and is what Obsidian's lint rules ask for; needs 1.13.2.                                                                                                                                     |
 | Drive Changes API (`changes.list` + page token)                      | Deferred to v2      | Most robust remote tracking and enables deletion/rename sync, but v1 keeps the PRD's watermark model and smaller scope. Revisit if the search-lag spike fails (OQ-T2).                                                                     |
 | `drive.file` scope                                                   | Deferred (PRD OQ-5) | Least privilege, but can't see files added outside the plugin.                                                                                                                                                                             |
 
 ## 10. Decisions and open questions
 
-| ID    | Question                                                                          | Decision / next step                                                                                                                                 | Status   |
-| ----- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| OQ-T1 | Where to store credentials, and which `minAppVersion`                             | Obsidian secret storage; `minAppVersion` 1.13.2                                                                                                      | Decided  |
-| OQ-T2 | Is a 5-minute overlap enough to cover Drive search lag?                           | The mechanism is tested against simulated lag; measure real lag on a test account (PLAN M5) and raise the overlap or adopt the Changes API if needed | **Open** |
-| OQ-T3 | Can `stat` after `modifyBinary` be trusted on iOS/Android (§5.2)?                 | Verify on devices (CT-01)                                                                                                                            | **Open** |
-| OQ-T4 | Do the declarative settings and secret controls behave as typed in real Obsidian? | Only type-checked so far; verify in the manual smoke test                                                                                            | **Open** |
+| ID    | Question                                                                                   | Decision / next step                                                                                                                                 | Status   |
+| ----- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| OQ-T1 | Where to store credentials, and which `minAppVersion`                                      | Obsidian secret storage; `minAppVersion` 1.13.2                                                                                                      | Decided  |
+| OQ-T2 | Is a 5-minute overlap enough to cover Drive search lag?                                    | The mechanism is tested against simulated lag; measure real lag on a test account (PLAN M5) and raise the overlap or adopt the Changes API if needed | **Open** |
+| OQ-T3 | Can `stat` after `modifyBinary` be trusted on iOS/Android (§5.2)?                          | Verify on devices (CT-01)                                                                                                                            | **Open** |
+| OQ-T4 | Do the declarative settings and the masked secret fields behave as typed in real Obsidian? | Only type-checked so far; verify in the manual smoke test                                                                                            | **Open** |

@@ -2,11 +2,14 @@ import { Notice, Platform, Plugin, normalizePath } from "obsidian";
 import { ObsidianLocalFiles } from "./adapters/obsidian/obsidian-local-files";
 import { obsidianTransport } from "./adapters/obsidian/obsidian-transport";
 import { FileSyncLog } from "./adapters/obsidian/file-sync-log";
+import { migrateLegacySecrets } from "./adapters/obsidian/persisted-data";
 import { PluginDataStateStore } from "./adapters/obsidian/plugin-data-state-store";
+import { SecretStorageCredentialStore } from "./adapters/obsidian/secret-storage-credential-store";
 import { GoogleDriveRemoteFiles } from "./adapters/google/google-drive-remote-files";
 import type { OAuthCredentials } from "./adapters/google/oauth-token-provider";
 import { SystemClock } from "./adapters/system/system-clock";
 import { SyncService } from "./app/sync-service";
+import type { CredentialStore } from "./ports/credential-store";
 import { ProgressIndicator } from "./ui/progress-indicator";
 import { formatReport } from "./ui/report-text";
 import { DriveSyncSettingTab } from "./ui/settings-tab";
@@ -14,11 +17,19 @@ import { DriveSyncSettingTab } from "./ui/settings-tab";
 /** Composition root (DESIGN §3.1): builds the adapters and wires them into the sync service. */
 export default class DriveSyncPlugin extends Plugin {
   private store!: PluginDataStateStore;
+  private credentialStore!: CredentialStore;
   private service!: SyncService;
   private progress!: ProgressIndicator;
 
   override async onload(): Promise<void> {
-    this.store = await PluginDataStateStore.load(this);
+    const raw: unknown = await this.loadData();
+    this.store = PluginDataStateStore.fromRaw(this, raw);
+    this.credentialStore = new SecretStorageCredentialStore(this.app.secretStorage);
+    migrateLegacySecrets(
+      raw,
+      (name) => this.app.secretStorage.getSecret(name),
+      this.credentialStore,
+    );
     const clock = new SystemClock();
     const vault = this.app.vault;
 
@@ -48,6 +59,7 @@ export default class DriveSyncPlugin extends Plugin {
     this.addSettingTab(
       new DriveSyncSettingTab(this.app, this, {
         store: this.store,
+        credentials: this.credentialStore,
         vaultName: () => vault.getName(),
       }),
     );
@@ -60,13 +72,12 @@ export default class DriveSyncPlugin extends Plugin {
     new Notice(formatReport(report));
   }
 
-  /** Resolves credentials; secrets come from Obsidian's secret storage. */
+  /** Current credentials, or `null` if any is missing. */
   private credentials(): OAuthCredentials | null {
-    const { clientId, clientSecretName, refreshTokenName } = this.store.data.settings;
-    const secrets = this.app.secretStorage;
-    const clientSecret = clientSecretName === "" ? null : secrets.getSecret(clientSecretName);
-    const refreshToken = refreshTokenName === "" ? null : secrets.getSecret(refreshTokenName);
-    if (clientId === "" || !clientSecret || !refreshToken) return null;
+    const { clientId } = this.store.data.settings;
+    const clientSecret = this.credentialStore.get("clientSecret");
+    const refreshToken = this.credentialStore.get("refreshToken");
+    if (clientId === "" || clientSecret === null || refreshToken === null) return null;
     return { clientId, clientSecret, refreshToken };
   }
 }

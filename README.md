@@ -7,7 +7,7 @@ Sync an Obsidian vault with a folder in your Google Drive using one command, **S
 - If a note changed on two devices, both versions are kept: yours stays the main file and the other is saved next to it as `<name> (conflict YYYY-MM-DD HHmm).md`.
 - If a sync fails halfway, run **Sync** again; it finishes the job without duplicates.
 
-**Status:** 0.1.0, pre-release. Not yet tested against real Google Drive or on phones; see [the plan](docs/PLAN.md).
+**Status:** 0.2.0, pre-release. Not yet tested against real Google Drive or on phones; see [the plan](docs/PLAN.md).
 
 ## Network use and accounts
 
@@ -28,7 +28,7 @@ Requires Obsidian 1.13.2 or later.
 2. Configure the OAuth consent screen and add your account as a test user.
 3. Create an **OAuth client ID** of type **Web application** with the authorized redirect URI `https://developers.google.com/oauthplayground`. Copy the client ID and client secret.
 4. In the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground), open the gear icon, select **Use your own OAuth credentials**, enter them, authorize the scope `https://www.googleapis.com/auth/drive`, and exchange the authorization code for tokens. Copy the refresh token.
-5. In Obsidian, open _Settings → Drive Sync_: enter the client ID, and add the client secret and refresh token with the secret fields.
+5. In Obsidian, open _Settings → Drive Sync_ and paste the client ID, client secret and refresh token into their fields. The secret and token are kept in Obsidian's secret storage.
 
 While the consent screen is in **Testing**, Google expires refresh tokens after 7 days. Set it to **In production** for a long-lived token; Google then shows an "unverified app" warning in step 4, which is expected for a personal client.
 
