@@ -234,7 +234,7 @@ export function multipartBody(
   metadata: object,
   data: ArrayBuffer,
 ): { body: ArrayBuffer; contentType: string } {
-  const boundary = `gdrive-sync-${crypto.randomUUID()}`;
+  const boundary = `drive-sync-${crypto.randomUUID()}`;
   const encoder = new TextEncoder();
   const head = encoder.encode(
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +

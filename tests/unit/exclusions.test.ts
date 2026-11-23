@@ -3,7 +3,7 @@ import { isExcludedPath, isValidName } from "../../src/domain/exclusions";
 
 describe("isExcludedPath (PRD FR-5)", () => {
   it.each([
-    ".obsidian/plugins/gdrive-sync/data.json",
+    ".obsidian/plugins/drive-sync/data.json",
     ".config-renamed/app.json",
     ".trash/old.md",
     ".git/HEAD",

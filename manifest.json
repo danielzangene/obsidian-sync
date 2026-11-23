@@ -1,7 +1,7 @@
 {
-  "id": "gdrive-sync",
+  "id": "drive-sync",
   "name": "Drive Sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.13.2",
   "description": "Sync your vault with a folder in Google Drive using one command.",
   "author": "danielzangene",

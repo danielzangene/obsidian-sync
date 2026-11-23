@@ -3,8 +3,8 @@ import type { CredentialStore, SecretKey } from "../../ports/credential-store";
 
 /** Fixed IDs in Obsidian's secret storage (lowercase letters, digits and dashes only). */
 const SECRET_IDS: Record<SecretKey, string> = {
-  clientSecret: "gdrive-sync-client-secret",
-  refreshToken: "gdrive-sync-refresh-token",
+  clientSecret: "drive-sync-client-secret",
+  refreshToken: "drive-sync-refresh-token",
 };
 
 /** `CredentialStore` on Obsidian's secret storage. */

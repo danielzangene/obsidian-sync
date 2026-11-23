@@ -384,7 +384,7 @@ describe("robustness", () => {
   it("never uploads excluded paths such as the config folder", async () => {
     const { drive, device } = setup();
     const a = device();
-    a.files.put(".obsidian/plugins/gdrive-sync/data.json", "{secret}");
+    a.files.put(".obsidian/plugins/drive-sync/data.json", "{secret}");
     a.files.put("notes/.DS_Store", "junk");
     a.files.put("a.md", "alpha");
 

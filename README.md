@@ -21,7 +21,7 @@ Requires Obsidian 1.13.2 or later.
 
 - **Community plugins** (once approved): in Obsidian, open _Settings → Community plugins → Browse_, search for **Drive Sync**, then install and enable it.
 - **BRAT:** in the BRAT plugin, add the beta plugin `danielzangene/obsidian-sync`.
-- **Manual:** download `main.js` and `manifest.json` from the latest release into `<vault>/.obsidian/plugins/gdrive-sync/`, then enable **Drive Sync** in _Settings → Community plugins_.
+- **Manual:** download `main.js` and `manifest.json` from the latest release into `<vault>/.obsidian/plugins/drive-sync/`, then enable **Drive Sync** in _Settings → Community plugins_.
 
 ## Setup
 
@@ -35,7 +35,7 @@ While the consent screen is in **Testing**, Google expires refresh tokens after 
 
 ## Usage
 
-Run **Drive Sync: Sync** from the command palette, or click the ribbon icon. Progress shows in the status bar (desktop) or a notice (mobile), and a summary notice appears at the end. The last 500 actions are logged in `.obsidian/plugins/gdrive-sync/sync.log`.
+Run **Drive Sync: Sync** from the command palette, or click the ribbon icon. Progress shows in the status bar (desktop) or a notice (mobile), and a summary notice appears at the end. The last 500 actions are logged in `.obsidian/plugins/drive-sync/sync.log`.
 
 **What is synced:** every file in the vault except names starting with `.` (including the config folder, `.trash` and `.git`), `Thumbs.db`, files over 100 MB, Google Docs/Sheets, and remote files whose names Obsidian can't use.
 
