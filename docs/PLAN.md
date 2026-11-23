@@ -1,12 +1,12 @@
 # Execution Plan: Google Drive Sync for Obsidian
 
-|                  |                                                           |
-| ---------------- | --------------------------------------------------------- |
-| **Status**       | M0–M4 complete; M5 (verification and release) in progress |
-| **Version**      | 1.1                                                       |
-| **Last updated** | 2026-11-21                                                |
-| **Owner**        | TBD                                                       |
-| **Related**      | [PRD v1.4](PRD.md) · [Technical design v1.1](DESIGN.md)   |
+|                  |                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| **Status**       | M0–M4 complete; 1.0.0 submitted to the community directory; M5 verification continues |
+| **Version**      | 1.2                                                                                   |
+| **Last updated** | 2026-11-21                                                                            |
+| **Owner**        | TBD                                                                                   |
+| **Related**      | [PRD v1.4](PRD.md) · [Technical design v1.1](DESIGN.md)                               |
 
 This document covers **when** and **in what order**. Requirements (FR-, NFR-, AT-) are in the [PRD](PRD.md); design sections (D§) are in the [design doc](DESIGN.md).
 
@@ -35,8 +35,8 @@ The search-lag spike (OQ-T2) and the device check (OQ-T3) were planned for M2 an
 | 5.2 | Search-lag spike: write files with one client, poll the change query with another, record the observed lag here; adjust `REMOTE_QUERY_OVERLAP_MS` if needed  | OQ-T2              | Test Google account |
 | 5.3 | CT-01 on iOS and Android, including a 100 MB attachment and stat after write                                                                                 | NFR-3, OQ-T3, OQ-4 | Devices             |
 | 5.4 | README: user setup and network disclosure (done); add screenshots after 5.1                                                                                  | NFR-5              | —                   |
-| 5.5 | Close PRD OQ-8: owner, reviewers, manifest `author`                                                                                                          | —                  | Decision            |
-| 5.6 | Dogfood 2 weeks on ≥ 2 devices; then `npm version 1.0.0`, push the tag, publish the draft release                                                            | PRD §5             | —                   |
+| 5.5 | Close PRD OQ-8: owner, reviewers, manifest `author`                                                                                                          | —                  | ✅ Author set       |
+| 5.6 | Release 1.0.0 (draft from the workflow; the owner reviews and publishes it) and submit at community.obsidian.md                                              | PRD §5             | Owner               |
 
 ## 3. Dependencies
 
@@ -48,15 +48,16 @@ The search-lag spike (OQ-T2) and the device check (OQ-T3) were planned for M2 an
 
 ## 4. Risks
 
-| ID  | Risk                                                                          | Likelihood | Impact | Mitigation                                              |
-| --- | ----------------------------------------------------------------------------- | ---------- | ------ | ------------------------------------------------------- |
-| R-1 | Real Drive search lag exceeds the 5-minute overlap; remote changes are missed | Low        | High   | Spike 5.2; raise overlap or adopt the Changes API (D§9) |
-| R-2 | Large files exhaust memory on mobile (`requestUrl` can't stream)              | Medium     | Medium | 100 MB limit; verify in 5.3                             |
-| R-3 | Mobile file APIs behave differently (stat after write)                        | Medium     | High   | Verify in 5.3 before dogfooding                         |
-| R-4 | Users hit the 7-day refresh-token expiry in "Testing" mode                    | High       | Medium | README guidance; clear rejected-token notice            |
-| R-5 | Rate limits on the first sync of a large vault                                | Low        | Medium | Backoff with `Retry-After`; 4 concurrent transfers      |
-| R-6 | Declarative settings or secret controls behave differently from their types   | Low        | Medium | Smoke test 5.1 (OQ-T4)                                  |
-| R-7 | `minAppVersion` 1.13.2 excludes users on older Obsidian                       | Low        | Low    | Documented in README                                    |
+| ID  | Risk                                                                                              | Likelihood | Impact | Mitigation                                                                                         |
+| --- | ------------------------------------------------------------------------------------------------- | ---------- | ------ | -------------------------------------------------------------------------------------------------- |
+| R-1 | Real Drive search lag exceeds the 5-minute overlap; remote changes are missed                     | Low        | High   | Spike 5.2; raise overlap or adopt the Changes API (D§9)                                            |
+| R-2 | Large files exhaust memory on mobile (`requestUrl` can't stream)                                  | Medium     | Medium | 100 MB limit; verify in 5.3                                                                        |
+| R-3 | Mobile file APIs behave differently (stat after write)                                            | Medium     | High   | Verify in 5.3 before dogfooding                                                                    |
+| R-4 | Users hit the 7-day refresh-token expiry in "Testing" mode                                        | High       | Medium | README guidance; clear rejected-token notice                                                       |
+| R-5 | Rate limits on the first sync of a large vault                                                    | Low        | Medium | Backoff with `Retry-After`; 4 concurrent transfers                                                 |
+| R-6 | Declarative settings or secret controls behave differently from their types                       | Low        | Medium | Smoke test 5.1 (OQ-T4)                                                                             |
+| R-7 | `minAppVersion` 1.13.2 excludes users on older Obsidian                                           | Low        | Low    | Documented in README                                                                               |
+| R-8 | 1.0.0 is published before the real-Drive smoke test, device tests and dogfooding (owner decision) | Medium     | High   | README tells users to back up; verify 5.1–5.3 right after release and ship fixes as patch releases |
 
 ## 5. Engineering conventions
 
