@@ -7,7 +7,7 @@ Sync an Obsidian vault with a folder in your Google Drive using one command, **S
 - If a note changed on two devices, both versions are kept: yours stays the main file and the other is saved next to it as `<name> (conflict YYYY-MM-DD HHmm).md`.
 - If a sync fails halfway, run **Sync** again; it finishes the job without duplicates.
 
-**Status:** 0.2.0, pre-release. Not yet tested against real Google Drive or on phones; see [the plan](docs/PLAN.md).
+**Status:** 1.0.0, submitted to the Obsidian community directory. Tested with a simulated Google Drive (100+ automated tests); real-world testing is ongoing, so back up your vault before the first sync. Report problems in [GitHub issues](https://github.com/danielzangene/obsidian-sync/issues).
 
 ## Network use and accounts
 
@@ -19,7 +19,8 @@ The refresh token gives full access to your Google Drive. The client secret and 
 
 Requires Obsidian 1.13.2 or later.
 
-- **BRAT:** in the BRAT plugin, add this repository as a beta plugin.
+- **Community plugins** (once approved): in Obsidian, open _Settings → Community plugins → Browse_, search for **Drive Sync**, then install and enable it.
+- **BRAT:** in the BRAT plugin, add the beta plugin `danielzangene/obsidian-sync`.
 - **Manual:** download `main.js` and `manifest.json` from the latest release into `<vault>/.obsidian/plugins/gdrive-sync/`, then enable **Drive Sync** in _Settings → Community plugins_.
 
 ## Setup
